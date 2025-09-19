@@ -11,18 +11,25 @@ CONTENT_DIR = (SITE_ROOT / "content").resolve()
 UPLOAD_DIR = (SITE_ROOT / "assets" / "uploads").resolve()
 HISTORY_DIR = (CONTENT_DIR / ".history").resolve()
 
-ADMIN_USER = os.getenv("CMS_USER", "editor")
-ADMIN_PASS = os.getenv("CMS_PASS", "change-me-please")
+# ---------- 将管理员账号密码写死（按要求） ----------
+# 注意：将明文密码写在代码里存在安全风险，仅在本地或受控环境短期使用。
+ADMIN_USER = "admin"
+ADMIN_PASS = "123456"
+# ----------------------------------------------------
 
 app = FastAPI()
 security = HTTPBasic()
 
 def auth(creds: HTTPBasicCredentials = Depends(security)):
+    # 使用 secrets.compare_digest 以防止时序攻击
     correct_user = secrets.compare_digest(creds.username, ADMIN_USER)
     correct_pass = secrets.compare_digest(creds.password, ADMIN_PASS)
     if not (correct_user and correct_pass):
-        raise HTTPException(status_code=401, detail="Unauthorized",
-                            headers={"WWW-Authenticate":"Basic"})
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": 'Basic realm="CMS"'}
+        )
     return True
 
 def safe_content_path(name: str) -> Path:
@@ -31,7 +38,7 @@ def safe_content_path(name: str) -> Path:
     if not str(p).startswith(str(CONTENT_DIR)): raise HTTPException(400, "Invalid path")
     return p
 
-@ app.get("/cms", response_class=HTMLResponse)
+@app.get("/cms", response_class=HTMLResponse)
 def admin_page(_: bool = Depends(auth)):
     # 极简单文件后台（左侧选择文件，右侧编辑器 + 保存）
     return """
@@ -98,7 +105,7 @@ async function reload(){ if(current) load(current); }
 st('fileList').addEventListener('change', e=> load(e.target.value));
 async function createFile(){
   const name = st('newName').value.trim();
-  if(!/^[a-zA-Z0-9_.-]+\\.json$/.test(name)){alert('请输入合法的 .json 文件名');return}
+  if(!/^[a-zA-Z0-9_.-]+\.json$/.test(name)){alert('请输入合法的 .json 文件名');return}
   const r = await fetch('/cms/create',{method:'POST',headers:{'Content-Type':'application/json'},
     body: JSON.stringify({name})});
   const d = await r.json(); await list(); st('status').textContent=d.msg||'已创建';
@@ -117,18 +124,19 @@ function formatJson(){
 list();
 </script>
 """
-@ app.get("/cms/list")
+
+@app.get("/cms/list")
 def list_files(_: bool = Depends(auth)):
     files = sorted([p.name for p in CONTENT_DIR.glob("*.json")])
     return {"files": files}
 
-@ app.get("/cms/get", response_class=PlainTextResponse)
+@app.get("/cms/get", response_class=PlainTextResponse)
 def get_file(name: str, _: bool = Depends(auth)):
     p = safe_content_path(name)
     if not p.exists(): raise HTTPException(404, "Not found")
     return p.read_text(encoding="utf-8")
 
-@ app.post("/cms/save")
+@app.post("/cms/save")
 def save_file(payload: dict, _: bool = Depends(auth)):
     name = payload.get("name"); content = payload.get("content","")
     p = safe_content_path(name)
@@ -143,14 +151,14 @@ def save_file(payload: dict, _: bool = Depends(auth)):
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"ok": True, "msg": "保存成功，已自动备份一份到 .history/"}
 
-@ app.post("/cms/create")
+@app.post("/cms/create")
 def create_file(payload: dict, _: bool = Depends(auth)):
     name = payload.get("name"); p = safe_content_path(name)
     if p.exists(): raise HTTPException(400, "文件已存在")
     p.write_text("{}\n", encoding="utf-8")
     return {"ok": True, "msg": "已创建空文件"}
 
-@ app.post("/cms/upload")
+@app.post("/cms/upload")
 def upload(file: UploadFile = File(...), _: bool = Depends(auth)):
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     suffix = Path(file.filename).suffix.lower()
